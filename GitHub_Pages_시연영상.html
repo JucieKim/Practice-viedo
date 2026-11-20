@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub Pages 게시 시연</title>
+<style>
+  :root { --bg:#0b0f14; --panel:#151b23; --line:#2a313c; --text:#e6edf3; --muted:#9198a1; --accent:#2f81f7; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI","Malgun Gothic",sans-serif; }
+  .wrap { max-width:1280px; margin:0 auto; padding:20px 16px 40px; }
+  h1 { font-size:20px; margin:0 0 12px; font-weight:600; }
+  canvas { width:100%; height:auto; display:block; border-radius:10px; background:#000; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0; }
+  button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 14px; font:inherit; font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.rec { background:#da3633; border-color:#da3633; color:#fff; font-weight:600; }
+  input[type=range] { flex:1; min-width:160px; accent-color:var(--accent); }
+  .time { font-variant-numeric:tabular-nums; color:var(--muted); font-size:13px; min-width:90px; text-align:right; }
+  .steps { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:6px; margin-top:8px; }
+  .steps button { text-align:left; font-size:13px; padding:8px 10px; }
+  .steps button.on { border-color:var(--accent); background:#10243f; }
+  .note { color:var(--muted); font-size:13px; line-height:1.6; margin-top:14px; }
+  #status { color:#f0b72f; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GitHub Pages로 HTML 웹사이트 게시하기 — 시연 영상</h1>
+  <canvas id="c" width="1280" height="720"></canvas>
+  <div class="bar">
+    <button id="play">⏸ 일시정지</button>
+    <button id="prev">⏮ 이전 단계</button>
+    <button id="next">다음 단계 ⏭</button>
+    <input id="seek" type="range" min="0" max="1000" value="0">
+    <span class="time" id="time">0:00 / 0:00</span>
+    <button id="rec" class="rec">● 영상 파일로 저장</button>
+  </div>
+  <div id="status"></div>
+  <div class="steps" id="steps"></div>
+  <p class="note">‘영상 파일로 저장’을 누르면 처음부터 끝까지 재생하면서 녹화한 뒤 자동으로 다운로드됩니다(약 2분, 브라우저에 따라 .mp4 또는 .webm).
+  녹화하는 동안에는 이 탭을 화면에 띄워 두세요. 키보드: Space 재생/정지, ← → 단계 이동.</p>
+</div>
+<script>
+const W = 1280, H = 720;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const FONT = '"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif';
+const C = { text:'#1f2328', muted:'#59636e', border:'#d1d9e0', link:'#0969da', green:'#1f883d', subtle:'#f6f8fa' };
+let now = 0;
+
+// ---------- drawing helpers ----------
+function R(x,y,w,h,r,fill,stroke,lw){ ctx.beginPath(); ctx.roundRect(x,y,w,h,r); if(fill){ctx.fillStyle=fill;ctx.fill();} if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1;ctx.stroke();} }
+function T(s,x,y,o){ o=o||{}; ctx.font=`${o.w||400} ${o.s||14}px ${FONT}`; ctx.fillStyle=o.c||C.text; ctx.textAlign=o.a||'left'; ctx.textBaseline='middle'; ctx.fillText(s,x,y); }
+function tw(s,size,w){ ctx.font=`${w||400} ${size}px ${FONT}`; return ctx.measureText(s).width; }
+function clamp(v){ return Math.max(0,Math.min(1,v)); }
+function ease(t){ t=clamp(t); return t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2; }
+function typ(str,t0,t1,s){ return str.slice(0, Math.round(clamp((s-t0)/(t1-t0))*str.length)); }
+function caretOn(){ return Math.floor(now*2)%2===0; }
+function btn(x,y,w,h,label,kind){
+  const k={green:['#1f883d','#fff','#1a7f37'],def:['#f6f8fa','#25292e','#d1d9e0'],dis:['#f6f8fa','#8c959f','#d1d9e0'],blue:['#0969da','#fff','#0969da']}[kind||'def'];
+  R(x,y,w,h,6,k[0],k[2]); T(label,x+w/2,y+h/2+1,{c:k[1],w:600,a:'center',s:14});
+}
+function hl(x,y,w,h){ const p=(Math.sin(now*7)+1)/2; ctx.save(); ctx.strokeStyle=`rgba(255,140,0,${.45+.55*p})`; ctx.lineWidth=3; ctx.beginPath(); ctx.roundRect(x-5,y-5,w+10,h+10,9); ctx.stroke(); ctx.restore(); }
+function input(x,y,w,h,val,focus,ph,sel){
+  R(x,y,w,h,6,'#fff',focus?'#0969da':C.border,focus?2:1);
+  if(sel && val){ const vw=tw(val,14); R(x+9,y+6,vw+2,h-12,2,'#b6d7ff'); }
+  if(val) T(val,x+10,y+h/2+1,{s:14}); else if(ph) T(ph,x+10,y+h/2+1,{s:14,c:'#8c959f'});
+  if(focus && !sel && caretOn()){ const cx=x+10+tw(val||'',14)+1; ctx.fillStyle=C.text; ctx.fillRect(cx,y+8,1.5,h-16); }
+}
+function dd(x,y,w,h,label){ R(x,y,w,h,6,'#f6f8fa',C.border); T(label,x+10,y+h/2+1,{s:14,w:600,c:'#25292e'}); T('▾',x+w-16,y+h/2+1,{s:12,c:C.muted}); }
+function shadowBox(x,y,w,h,r){ ctx.save(); ctx.shadowColor='rgba(0,0,0,.18)'; ctx.shadowBlur=24; ctx.shadowOffsetY=8; R(x,y,w,h,r||8,'#fff',C.border); ctx.restore(); }
+
+// ---------- browser + GitHub-like chrome ----------
+function browser(url){
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,600);
+  ctx.fillStyle='#dee1e6'; ctx.fillRect(0,0,W,36);
+  R(12,6,250,32,8,'#fff'); T('●',30,22,{s:10,c:'#24292f'}); T(url.split('/')[0],46,22,{s:13,c:'#3c4043'});
+  ctx.fillStyle='#fff'; ctx.fillRect(0,36,W,36);
+  T('←',22,54,{s:17,c:'#5f6368'}); T('→',50,54,{s:17,c:'#9aa0a6'}); T('⟳',80,55,{s:17,c:'#5f6368'});
+  R(110,41,1150,27,14,'#f1f3f4'); T('🔒',126,55,{s:11}); T(url,146,55,{s:13,c:'#202124'});
+  ctx.fillStyle='#dadce0'; ctx.fillRect(0,71,W,1);
+}
+function ghHeader(crumb, tabs, active){
+  const bottom = tabs ? 168 : 124;
+  ctx.fillStyle=C.subtle; ctx.fillRect(0,72,W,bottom-72); ctx.fillStyle=C.border; ctx.fillRect(0,bottom,W,1);
+  R(16,82,34,34,6,'#fff',C.border); for(let i=0;i<3;i++){ ctx.fillStyle='#59636e'; ctx.fillRect(25,92+i*6,16,2); }
+  ctx.beginPath(); ctx.arc(78,99,15,0,Math.PI*2); ctx.fillStyle='#1f2328'; ctx.fill();
+  let x=104; crumb.forEach((p,i)=>{ const last=i===crumb.length-1; T(p,x,99,{s:15,w:last?600:400}); x+=tw(p,15,last?600:400)+6; if(!last){ T('/',x,99,{s:15,c:C.muted}); x+=14; } });
+  R(870,84,300,30,6,'#fff',C.border); T('Type / to search',882,99,{s:13,c:'#8c959f'});
+  ctx.beginPath(); ctx.arc(1232,99,15,0,Math.PI*2); ctx.fillStyle='#8250df'; ctx.fill(); T('M',1232,100,{s:13,w:700,c:'#fff',a:'center'});
+  if(tabs){ tabs.forEach(t=>{ T(t.l,t.x+t.w/2,146,{s:14,a:'center',w:t.l===active?600:400}); if(t.l===active){ R(t.x+4,164,t.w-8,3,2,'#fd8c73'); } }); }
+  ctx.fillStyle='#fff'; ctx.fillRect(0,bottom+1,W,600-bottom-1);
+}
+const REPO_TABS=[{l:'<> Code',x:20,w:80},{l:'Issues',x:104,w:70},{l:'Pull requests',x:178,w:110},{l:'Actions',x:292,w:78},{l:'Projects',x:374,w:80},{l:'Security',x:458,w:80},{l:'Insights',x:542,w:76},{l:'⚙ Settings',x:622,w:90}];
+const PROFILE_TABS=[{l:'Overview',x:20,w:90},{l:'Repositories',x:114,w:110},{l:'Projects',x:228,w:80},{l:'Packages',x:312,w:84},{l:'Stars',x:400,w:60}];
+const repoHeader=a=>ghHeader(['my-account','my-website'],REPO_TABS,a);
+
+function codePage(file, msg, commits){
+  repoHeader('<> Code');
+  T('my-website',20,196,{s:20,w:600}); R(140,186,56,22,11,'#fff',C.border); T('Public',168,197,{s:12,c:C.muted,a:'center'});
+  dd(20,220,90,30,'⑂ main'); btn(900,220,100,30,'Go to file'); btn(1010,220,110,30,'Add file ▾'); btn(1130,220,130,30,'<> Code ▾','green');
+  R(20,262,1240,92,6,'#fff',C.border); R(20,262,1240,46,[6,6,0,0],C.subtle);
+  ctx.beginPath(); ctx.arc(42,285,10,0,Math.PI*2); ctx.fillStyle='#8250df'; ctx.fill();
+  T('my-account',60,285,{s:14,w:600}); T(msg,150,285,{s:14,c:C.muted}); T('now · '+commits,1245,285,{s:13,c:C.muted,a:'right'});
+  ctx.fillStyle=C.border; ctx.fillRect(20,308,1240,1);
+  T('📄',40,331,{s:14}); T(file,64,331,{s:14,c:C.link}); T(msg,420,331,{s:14,c:C.muted}); T('now',1245,331,{s:13,c:C.muted,a:'right'});
+  R(20,370,1240,90,6,'#fff',C.border); T('Add a README',640,400,{s:16,w:600,a:'center'}); T('Help people interested in this repository understand your project.',640,428,{s:13,c:C.muted,a:'center'});
+}
+const HTML_LINES=['<!DOCTYPE html>','<html lang="ko">','<head>','  <meta charset="UTF-8">','  <title>나의 첫 웹사이트</title>','</head>','<body>','  <h1>안녕하세요!</h1>','  <p>GitHub Pages로 만든 첫 웹사이트입니다.</p>','</body>','</html>'];
+function codeLines(x,y,n,lines){ (lines||HTML_LINES).slice(0,n).forEach((l,i)=>{ T(String(i+1),x+28,y+i*22,{s:13,c:'#8c959f',a:'right'}); T(l,x+50,y+i*22,{s:13,c:l.trim().startsWith('<')?'#116329':C.text}); }); }
+
+const SIDEBAR=[['General',195],['#Access',228],['Collaborators',254],['Moderation options',280],['#Code and automation',313],['Branches',339],['Tags',365],['Rules',391],['Actions',417],['Webhooks',443],['Environments',469],['Codespaces',495],['Pages',521]];
+function settingsPage(active){
+  repoHeader('⚙ Settings');
+  SIDEBAR.forEach(([n,y])=>{
+    if(n[0]==='#'){ T(n.slice(1),30,y,{s:12,w:600,c:C.muted}); return; }
+    if(n===active){ R(20,y-14,260,28,6,'#eef1f4'); R(20,y-10,4,20,2,'#fd8c73'); }
+    T(n,40,y,{s:14,w:n===active?600:400});
+  });
+  ctx.fillStyle=C.border; ctx.fillRect(300,180,1,410);
+}
+function pagesMain(o){
+  let y=200;
+  T('GitHub Pages',320,y,{s:24,w:400}); T('GitHub Pages is designed to host your personal, organization, or project pages from a GitHub repository.',320,y+28,{s:13,c:C.muted});
+  ctx.fillStyle=C.border; ctx.fillRect(320,y+46,940,1);
+  y+=50;
+  if(o.live){
+    R(320,y+6,940,58,6,'#dafbe1','#4ac26b');
+    T('Your site is live at ',336,y+26,{s:15,w:600}); T('https://my-account.github.io/my-website/',336+tw('Your site is live at ',15,600),y+26,{s:15,w:600,c:C.link});
+    T('Last deployed by my-account now',336,y+48,{s:12,c:C.muted});
+    btn(1140,y+19,105,32,'↗ Visit site'); if(o.hlVisit) hl(1140,y+19,105,32);
+    y+=72;
+  }
+  T('Build and deployment',320,y+28,{s:18,w:600});
+  T('Source',320,y+58,{s:14,w:600});
+  dd(320,y+72,o.actions?170:210,30, o.actions?'GitHub Actions':'Deploy from a branch');
+  if(o.actions){
+    T('Use a suggested workflow, browse all workflows, or create your own.',320,y+124,{s:13,c:C.muted});
+    R(320,y+140,300,64,6,'#fff',C.border); T('Static HTML',336,y+160,{s:14,w:600}); T('Deploy static files without a build.',336,y+184,{s:12,c:C.muted});
+  } else {
+    T('Branch',320,y+128,{s:14,w:600});
+    T(o.branch==='main'&&o.saved?'Your GitHub Pages site is currently being built from the main branch.':'GitHub Pages is currently disabled. Select a source below to enable GitHub Pages for this repository.',320,y+150,{s:13,c:C.muted});
+    dd(320,y+165,120,30,'⑂ '+(o.branch||'None'));
+    if(o.branch==='main') dd(450,y+165,120,30,'📁 / (root)'); else { R(450,y+165,120,30,6,'#f6f8fa',C.border); T('📁 / (root)',460,y+181,{s:14,c:'#8c959f'}); }
+    btn(580,y+165,70,30,'Save', o.branch==='main'?'def':'dis');
+    if(o.saved && !o.live){ R(320,y+210,420,34,6,'#dafbe1','#4ac26b'); T('✓  GitHub Pages source saved.',334,y+227,{s:14,c:'#1a7f37',w:600}); }
+  }
+}
+function menu(x,y,w,title,items){ // items: [label, sub?]
+  const ih = items.some(i=>i[1])?52:32; const h=40+items.length*ih;
+  shadowBox(x,y,w,h); T(title,x+14,y+20,{s:13,w:600}); ctx.fillStyle=C.border; ctx.fillRect(x,y+38,w,1);
+  items.forEach((it,i)=>{ const iy=y+40+i*ih; if(it[2]) R(x+4,iy+2,w-8,ih-4,6,'#eef1f4'); T(it[0],x+16,iy+(it[1]?18:16),{s:14,w:it[1]?600:400}); if(it[1]) T(it[1],x+16,iy+38,{s:12,c:C.muted}); });
+}
+
+// ---------- scenes ----------
+// cur: [time, x, y, click?] — cursor arrives at (x,y) at time; click if 4th = 1
+const SCENES = [];
+function S(o){ SCENES.push(o); }
+
+S({ dur:5, intro:true, draw(s){
+  const g=ctx.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0d1117'); g.addColorStop(1,'#132a4a'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  const a=ease(s/1.0); ctx.globalAlpha=a;
+  T('따라하기 시연',640,250,{s:22,c:'#58a6ff',a:'center',w:600});
+  T('GitHub Pages로 HTML 웹사이트 게시하기',640,320,{s:48,c:'#fff',a:'center',w:700});
+  T('HTML 파일 하나만 있으면 누구나 볼 수 있는 웹사이트 주소가 생겨요',640,385,{s:22,c:'#c9d1d9',a:'center'});
+  R(370,440,540,44,22,'rgba(47,129,247,.18)','#2f81f7'); T('게시 14단계 + 문제 해결 + 수정해서 다시 게시하기',640,463,{s:18,c:'#cfe3ff',a:'center',w:600});
+  ctx.globalAlpha=1;
+}});
+
+S({ dur:7, step:1, t:'GitHub에 로그인합니다', d:'github.com 에 접속해 아이디와 비밀번호 입력 → Sign in',
+ cur:[[0,900,520],[1.0,640,232,1],[2.9,640,297,1],[4.9,640,353,1]],
+ draw(s){
+  browser('github.com/login');
+  ctx.beginPath(); ctx.arc(640,110,22,0,Math.PI*2); ctx.fillStyle='#1f2328'; ctx.fill();
+  T('Sign in to GitHub',640,160,{s:24,a:'center'});
+  R(440,185,400,205,8,C.subtle,C.border);
+  T('Username or email address',460,206,{s:14,w:600});
+  input(460,216,360,32, typ('my-account',1.2,2.5,s), s>1&&s<2.9);
+  T('Password',460,268,{s:14,w:600}); T('Forgot password?',820,268,{s:12,c:C.link,a:'right'});
+  input(460,280,360,32, '●'.repeat(Math.round(clamp((s-3.1)/1.1)*8)), s>2.9&&s<4.9);
+  btn(460,336,360,34,'Sign in','green'); if(s>4.2&&s<5) hl(460,336,360,34);
+  if(s>5.3){ ctx.globalAlpha=ease((s-5.3)/.4); R(520,420,240,40,20,'#1a7f37'); T('✓ 로그인 완료',640,441,{s:16,c:'#fff',a:'center',w:600}); ctx.globalAlpha=1; }
+ }});
+
+S({ dur:8, step:2, t:'새 저장소(Repository) 만들기 시작', d:'왼쪽 위 메뉴(☰) → All repositories → New repository',
+ cur:[[0,640,441],[1.1,33,99,1],[2.9,120,482,1],[5.3,1165,206,1]],
+ draw(s){
+  if(s<3.2){
+    browser('github.com');
+    ghHeader(['Dashboard']);
+    T('Top repositories',20,160,{s:14,w:600}); btn(240,146,56,28,'New','green');
+    input(20,182,276,30,'',false,'Find a repository…'); T('아직 저장소가 없습니다',20,236,{s:13,c:C.muted});
+    T('Home',330,160,{s:20,w:600});
+    for(let i=0;i<3;i++){ R(330,186+i*130,920,116,8,'#fff',C.border); R(350,210+i*130,300,12,6,'#eaeef2'); R(350,236+i*130,820,10,5,'#f0f2f5'); R(350,256+i*130,700,10,5,'#f0f2f5'); }
+    if(s>1.1){
+      const a=ease((s-1.1)/.35); const dx=-320+320*a;
+      ctx.fillStyle=`rgba(0,0,0,${.3*a})`; ctx.fillRect(0,72,W,528);
+      ctx.save(); ctx.shadowColor='rgba(0,0,0,.25)'; ctx.shadowBlur=20; ctx.fillStyle='#fff'; ctx.fillRect(dx,72,320,528); ctx.restore();
+      ctx.beginPath(); ctx.arc(dx+36,104,15,0,Math.PI*2); ctx.fillStyle='#1f2328'; ctx.fill(); T('✕',dx+292,104,{s:16,c:C.muted,a:'center'});
+      ['🏠  Home','⊙  Issues','⇄  Pull requests','▦  Projects','💬  Discussions','☁  Codespaces','🧭  Explore'].forEach((n,i)=>T(n,dx+24,150+i*38,{s:15}));
+      ctx.fillStyle=C.border; ctx.fillRect(dx+16,428,288,1);
+      T('Repositories',dx+24,450,{s:12,w:600,c:C.muted});
+      R(dx+12,466,296,34,6,s>2.2?'#eef1f4':'#fff'); T('📚  All repositories',dx+24,483,{s:15,w:600});
+      if(s>1.8&&s<2.9) hl(dx+12,466,296,34);
+    }
+  } else {
+    browser('github.com/my-account?tab=repositories');
+    ghHeader(['my-account'],PROFILE_TABS,'Repositories');
+    ctx.beginPath(); ctx.arc(140,280,85,0,Math.PI*2); ctx.fillStyle='#8250df'; ctx.fill(); T('M',140,282,{s:60,w:700,c:'#fff',a:'center'});
+    T('my-account',60,395,{s:20,w:600});
+    input(320,190,560,32,'',false,'Find a repository…'); btn(890,190,80,32,'Type ▾'); btn(980,190,80,32,'Sort ▾');
+    btn(1090,190,150,32,'📕 New repository','green'); if(s>4.0&&s<5.3) hl(1090,190,150,32);
+    T('my-account doesn’t have any public repositories yet.',780,300,{s:16,c:C.muted,a:'center'});
+  }
+ }});
+
+S({ dur:8, step:3, t:'저장소 이름을 입력하고 만들기', d:'Repository name 입력 → Public(공개) 확인 → Create repository',
+ cur:[[0,1165,206],[0.9,660,291,1],[4.0,360,430],[5.6,865,547,1]],
+ draw(s){
+  browser('github.com/new'); ghHeader(['New repository']);
+  T('Create a new repository',340,196,{s:24,w:600});
+  T('A repository contains all project files, including the revision history.',340,226,{s:13,c:C.muted});
+  T('Owner *',340,258,{s:14,w:600}); T('Repository name *',520,258,{s:14,w:600});
+  dd(340,275,150,32,'my-account'); T('/',505,291,{s:20,c:C.muted,a:'center'});
+  input(520,275,280,32, typ('my-website',1.2,2.6,s), s>0.9&&s<5.5);
+  if(s>1.2&&s<3.6) hl(520,275,280,32);
+  if(s>2.8){ T('✓ my-website is available.',520,324,{s:13,c:'#1a7f37',w:600}); }
+  T('Description (optional)',340,352,{s:14,w:600}); input(340,366,600,32,'');
+  // visibility
+  ctx.beginPath(); ctx.arc(352,430,8,0,Math.PI*2); ctx.strokeStyle='#0969da'; ctx.lineWidth=2; ctx.stroke(); ctx.beginPath(); ctx.arc(352,430,4,0,Math.PI*2); ctx.fillStyle='#0969da'; ctx.fill();
+  T('Public',370,424,{s:14,w:600}); T('Anyone on the internet can see this repository.',370,444,{s:12,c:C.muted});
+  ctx.beginPath(); ctx.arc(352,480,8,0,Math.PI*2); ctx.strokeStyle='#8c959f'; ctx.lineWidth=1.5; ctx.stroke();
+  T('Private',370,474,{s:14,w:600}); T('You choose who can see and commit to this repository.',370,494,{s:12,c:C.muted});
+  if(s>3.4&&s<5.2){ hl(340,414,330,40); R(700,412,250,44,8,'#fff8c5','#d4a72c'); T('무료 계정은 Public 이어야',715,426,{s:13,w:600}); T('Pages를 사용할 수 있어요',715,444,{s:13,w:600}); }
+  btn(790,530,150,34,'Create repository','green'); if(s>4.8&&s<5.7) hl(790,530,150,34);
+ }});
+
+let LINK_X=0, LINK_W=0; const QS_PRE='Get started by creating a new file or ', QS_LINK='uploading an existing file';
+S({ dur:6, step:4, t:'파일 업로드 화면으로 이동', d:'Quick setup 상자 안의 ‘uploading an existing file’ 링크 클릭',
+ setup(){ LINK_X=36+tw(QS_PRE,14); LINK_W=tw(QS_LINK,14); this.cur=[[0,865,547],[2.8,LINK_X+LINK_W/2,330,1]]; },
+ draw(s){
+  browser('github.com/my-account/my-website'); repoHeader('<> Code');
+  T('my-website',20,196,{s:20,w:600}); R(140,186,56,22,11,'#fff',C.border); T('Public',168,197,{s:12,c:C.muted,a:'center'});
+  R(20,228,1240,130,6,'#ddf4ff','#54aeff');
+  T('Quick setup — if you’ve done this kind of thing before',36,254,{s:15,w:600});
+  btn(36,274,150,30,'Set up in Desktop'); R(196,274,700,30,6,'#fff',C.border); T('https://github.com/my-account/my-website.git',206,290,{s:13,c:C.muted});
+  T(QS_PRE,36,330,{s:14}); T(QS_LINK,LINK_X,330,{s:14,c:C.link,w:600}); ctx.fillStyle=C.link; ctx.fillRect(LINK_X,340,LINK_W,1);
+  T('. We recommend every repository include a README.',LINK_X+LINK_W,330,{s:14});
+  if(s>1.2&&s<2.8) hl(LINK_X,320,LINK_W,20);
+  T('…or create a new repository on the command line',20,390,{s:15,w:600});
+  R(20,404,1240,150,6,C.subtle,C.border);
+  ['echo "# my-website" >> README.md','git init','git add README.md','git commit -m "first commit"','git push -u origin main'].forEach((l,i)=>T(l,36,426+i*26,{s:13,c:C.muted}));
+ }});
+
+S({ dur:10, step:5, t:'HTML 파일 업로드', d:'내 PC의 HTML 파일을 끌어다 놓기(또는 choose your files) → Commit changes',
+ cur:[[0,700,330],[0.9,1150,520],[2.6,640,300],[6.6,95,564,1]],
+ draw(s){
+  browser('github.com/my-account/my-website/upload/main'); repoHeader('<> Code');
+  T('my-website /',20,194,{s:16,w:600});
+  const over=s>1.9&&s<2.7;
+  ctx.save(); ctx.setLineDash([8,6]); R(20,212,1240,170,8,over?'#ddf4ff':'#fff',over?'#0969da':'#afb8c1',2); ctx.restore();
+  T('📄',640,252,{s:30,a:'center'});
+  T('Drag files here to add them to your repository',640,298,{s:20,w:600,a:'center'});
+  T('Or choose your files',640,328,{s:14,c:C.link,a:'center'});
+  if(s>2.7){ R(20,392,1240,30,6,C.subtle,C.border); T('📄  mysite.html',34,407,{s:14,w:600}); T('2 KB   ✕',1245,407,{s:13,c:C.muted,a:'right'}); }
+  R(20,432,1240,104,6,'#fff',C.border); T('Commit changes',36,452,{s:16,w:600});
+  input(36,468,560,30,'Add files via upload');
+  ctx.beginPath(); ctx.arc(46,518,7,0,Math.PI*2); ctx.strokeStyle='#0969da'; ctx.lineWidth=2; ctx.stroke(); ctx.beginPath(); ctx.arc(46,518,3.5,0,Math.PI*2); ctx.fillStyle='#0969da'; ctx.fill();
+  T('Commit directly to the main branch.',62,518,{s:13});
+  btn(20,548,150,32,'Commit changes','green'); btn(180,548,80,32,'Cancel');
+  if(s>4.2&&s<6.6) hl(20,548,150,32);
+  if(s>6.9){ R(280,548,260,32,6,'#fff8c5','#d4a72c'); T('⏳ Processing your files…',296,564,{s:13,w:600}); }
+  // file being dragged from the PC
+  if(s<0.9){ R(1110,486,80,90,8,'#fff','#8c959f'); T('HTML',1150,520,{s:15,w:700,c:'#cf222e',a:'center'}); T('mysite.html',1150,592,{s:12,a:'center',w:600}); T('내 PC',1150,474,{s:11,c:C.muted,a:'center'}); }
+ },
+ overlay(s,cx,cy){ if(s>=0.9&&s<2.7){ ctx.globalAlpha=.9; R(cx+10,cy+10,70,80,8,'#fff','#0969da',2); T('HTML',cx+45,cy+42,{s:14,w:700,c:'#cf222e',a:'center'}); T('mysite.html',cx+45,cy+72,{s:11,a:'center',w:600}); ctx.globalAlpha=1; } }
+ });
+
+S({ dur:6, step:6, t:'올라간 파일 열기', d:'<> Code 탭으로 다시 들어가서 업로드한 파일 이름 클릭',
+ cur:[[0,95,564],[1.0,60,146,1],[3.0,105,331,1]],
+ draw(s){
+  browser('github.com/my-account/my-website'); codePage('mysite.html','Add files via upload','1 Commit');
+  if(s<1.0) hl(20,128,80,36);
+  if(s>1.4&&s<3.0) hl(60,320,90,22);
+ }});
+
+S({ dur:6, step:7, t:'파일 편집 모드로 들어가기', d:'오른쪽 위 연필 아이콘(✎ Edit this file) 클릭',
+ cur:[[0,105,331],[1.5,1141,287],[3.0,1141,287,1]],
+ draw(s){ fileView(s,'mysite.html','Add files via upload'); }});
+
+function fileView(s,name,msg){
+  browser('github.com/my-account/my-website/blob/main/'+name); repoHeader('<> Code');
+  T('my-website',20,196,{s:16,c:C.link,w:600}); T('/ '+name,20+tw('my-website',16,600)+6,196,{s:16,w:600});
+  R(20,214,1240,40,6,C.subtle,C.border); T('my-account   '+msg,36,234,{s:13,c:C.muted});
+  R(20,262,1240,320,6,'#fff',C.border); R(20,262,1240,48,[6,6,0,0],C.subtle);
+  R(32,271,110,30,6,'#fff',C.border); T('Code',62,286,{s:13,w:600,a:'center'}); T('Blame',112,286,{s:13,a:'center'});
+  T('11 lines (11 loc) · 2 KB',160,286,{s:13,c:C.muted});
+  btn(960,271,56,30,'Raw'); btn(1022,271,40,30,'⧉'); btn(1068,271,40,30,'⤓');
+  R(1125,271,32,30,6,s>1.5?'#eaeef2':'#f6f8fa',C.border); T('✎',1141,287,{s:16,a:'center'}); btn(1164,271,40,30,'⋯');
+  if(s>1.5&&s<3.0) hl(1125,271,32,30);
+  if(s>1.6){ R(1086,226,110,28,6,'#25292e'); T('Edit this file',1141,240,{s:12,c:'#fff',a:'center',w:600}); }
+  codeLines(20,330,11);
+}
+
+S({ dur:11, step:8, t:'파일 이름을 index.html 로 바꾸기', d:'이름 칸 클릭 → 전체 선택(Ctrl+A) 후 index.html 입력 → Commit changes… → Commit changes',
+ cur:[[0,1141,287],[1.2,240,200,1],[5.2,1180,200,1],[8.3,805,461,1]],
+ draw(s){
+  browser('github.com/my-account/my-website/edit/main/'+(s<4?'mysite.html':'index.html')); repoHeader('<> Code');
+  T('my-website /',20,200,{s:15,c:C.link,w:600});
+  const val = s<2.4 ? 'mysite.html' : typ('index.html',2.4,3.9,s);
+  input(130,184,220,32,val, s>1.2&&s<5.2, '', s>=1.6&&s<2.4);
+  T('in  ⑂ main',362,200,{s:14,c:C.muted});
+  btn(960,184,130,32,'Cancel changes'); btn(1100,184,160,32,'Commit changes…','green');
+  if(s>4.4&&s<5.3) hl(1100,184,160,32);
+  if(s>1.6&&s<2.4){ R(180,138,120,34,8,'#25292e'); T('Ctrl + A',240,155,{s:15,c:'#fff',a:'center',w:700}); }
+  if(s>2.4){ R(470,182,400,36,8,'#fff1e5','#fb8f44'); T('⚠  첫 번째 파일 이름은 반드시 index.html',486,200,{s:15,w:700,c:'#bc4c00'}); }
+  R(20,230,1240,355,6,'#fff',C.border); R(20,230,1240,40,[6,6,0,0],C.subtle);
+  T('Edit',48,250,{s:13,w:600}); T('Preview',100,250,{s:13,c:C.muted});
+  codeLines(20,290,11);
+  if(s>5.4&&s<8.7){
+    const a=ease((s-5.4)/.3); ctx.fillStyle=`rgba(0,0,0,${.35*a})`; ctx.fillRect(0,72,W,528);
+    ctx.globalAlpha=a; shadowBox(390,170,500,330,10);
+    T('Commit changes',410,198,{s:18,w:600}); T('✕',870,198,{s:16,c:C.muted,a:'center'}); ctx.fillStyle=C.border; ctx.fillRect(390,222,500,1);
+    T('Commit message',410,240,{s:14,w:600}); input(410,252,460,32,'Rename mysite.html to index.html');
+    T('Extended description',410,306,{s:14,w:600}); R(410,318,460,56,6,'#fff',C.border); T('Add an optional extended description..',420,334,{s:13,c:'#8c959f'});
+    ctx.beginPath(); ctx.arc(420,402,7,0,Math.PI*2); ctx.strokeStyle='#0969da'; ctx.lineWidth=2; ctx.stroke(); ctx.beginPath(); ctx.arc(420,402,3.5,0,Math.PI*2); ctx.fillStyle='#0969da'; ctx.fill();
+    T('Commit directly to the main branch',436,402,{s:13});
+    btn(640,445,90,32,'Cancel'); btn(740,445,130,32,'Commit changes','green');
+    if(s>7.2&&s<8.3) hl(740,445,130,32);
+    ctx.globalAlpha=1;
+  }
+ }});
+
+S({ dur:5, step:9, t:'파일 이름이 바뀌었는지 확인', d:'Code 화면에 index.html 로 표시되면 성공',
+ cur:[[0,805,461],[1.0,60,146,1],[2.6,300,420]],
+ draw(s){
+  browser('github.com/my-account/my-website'); codePage('index.html','Rename mysite.html to index.html','2 Commits');
+  if(s>1.3){ hl(30,318,1220,26); R(1000,382,240,36,18,'#1a7f37'); T('✓ index.html 로 변경 완료',1120,400,{s:14,c:'#fff',a:'center',w:700}); }
+ }});
+
+S({ dur:7, step:10, t:'Pages 설정 열기', d:'상단 ⚙ Settings 탭 → 왼쪽 메뉴 아래쪽의 Pages',
+ cur:[[0,300,420],[1.2,667,146,1],[3.9,60,521,1]],
+ draw(s){
+  if(s<1.5){ browser('github.com/my-account/my-website'); codePage('index.html','Rename mysite.html to index.html','2 Commits'); if(s>0.3) hl(622,128,90,36); return; }
+  browser('github.com/my-account/my-website/settings'+(s>4.2?'/pages':''));
+  settingsPage(s>4.2?'Pages':'General');
+  if(s>2.2&&s<3.9) hl(20,507,260,28);
+  if(s<=4.2){
+    T('General',320,200,{s:24}); ctx.fillStyle=C.border; ctx.fillRect(320,222,940,1);
+    T('Repository name',320,250,{s:14,w:600}); input(320,264,300,32,'my-website'); btn(630,264,80,32,'Rename');
+    T('Default branch',320,330,{s:14,w:600}); T('The default branch is considered the “base” branch in your repository.',320,354,{s:13,c:C.muted});
+    dd(320,370,120,30,'⑂ main');
+  } else pagesMain({});
+ }});
+
+S({ dur:11, step:11, t:'배포할 브랜치 선택', d:'Branch 에서 None → main, 폴더는 / (root) → Save',
+ cur:[[0,60,521],[1.4,380,431,1],[3.0,370,491,1],[4.5,510,431,1],[5.9,500,491,1],[7.4,615,431,1]],
+ draw(s){
+  browser('github.com/my-account/my-website/settings/pages'); settingsPage('Pages');
+  const branch = s>3.0?'main':null;
+  pagesMain({branch, saved:s>7.5});
+  if(s>0.2&&s<1.4) hl(320,415,120,30);
+  if(s>1.4&&s<3.0) menu(320,450,220,'Select branch',[['main',null,s>2.2],['✓ None']]);
+  if(s>4.5&&s<5.9) menu(450,450,200,'Select folder',[['/ (root)',null,s>5.2],['/docs']]);
+  if(s>6.2&&s<7.4) hl(580,415,70,30);
+ }});
+
+S({ dur:7, step:12, t:'Source 를 GitHub Actions 로 변경', d:'Build and deployment → Source 드롭다운 → GitHub Actions 선택',
+ cur:[[0,615,431],[1.2,420,337,1],[3.0,420,446,1]],
+ draw(s){
+  browser('github.com/my-account/my-website/settings/pages'); settingsPage('Pages');
+  pagesMain({branch:'main', saved:true, actions:s>3.0});
+  if(s<1.2) hl(320,322,210,30);
+  if(s>1.2&&s<3.0) menu(320,358,380,'Select source',[['Deploy from a branch','Classic Pages experience'],['GitHub Actions','Best for using frameworks and customizing your build',s>2.2]]);
+ }});
+
+S({ dur:6, step:13, t:'약 1분 기다리기', d:'GitHub이 웹사이트를 만드는(배포) 동안 잠시 기다립니다',
+ cur:null,
+ draw(s){
+  browser('github.com/my-account/my-website/settings/pages'); settingsPage('Pages'); pagesMain({actions:true});
+  ctx.fillStyle='rgba(13,17,23,.72)'; ctx.fillRect(0,0,W,600);
+  const p=clamp((s-0.5)/4.2);
+  ctx.lineWidth=14; ctx.strokeStyle='#30363d'; ctx.beginPath(); ctx.arc(640,280,110,0,Math.PI*2); ctx.stroke();
+  ctx.strokeStyle='#2f81f7'; ctx.lineCap='round'; ctx.beginPath(); ctx.arc(640,280,110,-Math.PI/2,-Math.PI/2+Math.PI*2*p); ctx.stroke(); ctx.lineCap='butt';
+  const sec=Math.round(p*60); T('0:'+String(sec).padStart(2,'0'),640,270,{s:46,w:700,c:'#fff',a:'center'});
+  T(p<1?'배포 중…':'완료!',640,318,{s:18,c:p<1?'#9ecbff':'#7ee787',a:'center',w:600});
+  T('⏳ 약 1분 기다린 뒤 새로고침(F5) 하세요',640,450,{s:22,c:'#fff',a:'center',w:600});
+ }});
+
+S({ dur:10, step:14, t:'새로고침 후 사이트 주소 확인', d:'‘Your site is live at …’ 주소가 보이면 성공! Visit site 로 열어보기',
+ cur:[[0,640,450],[1.0,80,55,1],[3.6,1192,286,1]],
+ draw(s){
+  if(s<4.0){
+    browser('github.com/my-account/my-website/settings/pages'); settingsPage('Pages');
+    pagesMain({actions:true, live:s>1.5, hlVisit:s>2.6&&s<3.6});
+    if(s<1.0) hl(66,42,28,26);
+    if(s>1.5&&s<2.6) hl(320,256,940,58);
+    if(s>1.0&&s<1.5){ ctx.fillStyle=`rgba(255,255,255,${1-(s-1.0)/.5})`; ctx.fillRect(0,72,W,528); }
+    return;
+  }
+  browser('my-account.github.io/my-website/');
+  const g=ctx.createLinearGradient(0,72,W,600); g.addColorStop(0,'#6e40c9'); g.addColorStop(1,'#1f6feb'); ctx.fillStyle=g; ctx.fillRect(0,72,W,528);
+  const a=ease((s-4.0)/.6); ctx.globalAlpha=a;
+  T('안녕하세요!',640,270,{s:64,w:700,c:'#fff',a:'center'});
+  T('GitHub Pages로 만든 첫 웹사이트입니다.',640,345,{s:24,c:'#e6edf3',a:'center'});
+  ctx.globalAlpha=1;
+  if(s>5.2){ const b=ease((s-5.2)/.4); ctx.globalAlpha=b; R(390,420,500,56,28,'rgba(255,255,255,.95)'); T('🎉 게시 완료! 이 주소를 공유하면 누구나 볼 수 있어요',640,449,{s:17,w:700,c:'#1a7f37',a:'center'}); ctx.globalAlpha=1; hl(140,42,330,26); }
+ }});
+
+// ================= 문제 해결: 유니콘 페이지 =================
+function sectionCard(s,kicker,title,sub,color){
+  const g=ctx.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0d1117'); g.addColorStop(1,'#1c2433'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  ctx.globalAlpha=ease(s/.8);
+  R(640-tw(kicker,18,700)/2-20,236,tw(kicker,18,700)+40,40,20,color); T(kicker,640,257,{s:18,w:700,c:'#fff',a:'center'});
+  T(title,640,330,{s:44,w:700,c:'#fff',a:'center'});
+  T(sub,640,392,{s:21,c:'#c9d1d9',a:'center'});
+  ctx.globalAlpha=1;
+}
+function waitRing(s,t0,t1,label){
+  ctx.fillStyle='rgba(13,17,23,.72)'; ctx.fillRect(0,0,W,600);
+  const p=clamp((s-t0)/(t1-t0));
+  ctx.lineWidth=14; ctx.strokeStyle='#30363d'; ctx.beginPath(); ctx.arc(640,270,100,0,Math.PI*2); ctx.stroke();
+  ctx.strokeStyle='#2f81f7'; ctx.lineCap='round'; ctx.beginPath(); ctx.arc(640,270,100,-Math.PI/2,-Math.PI/2+Math.PI*2*p); ctx.stroke(); ctx.lineCap='butt';
+  T('0:'+String(Math.round(p*60)).padStart(2,'0'),640,262,{s:42,w:700,c:'#fff',a:'center'});
+  T(p<1?'배포 중…':'완료!',640,306,{s:17,c:p<1?'#9ecbff':'#7ee787',a:'center',w:600});
+  T(label,640,430,{s:22,c:'#fff',a:'center',w:600});
+}
+function note(x,y,lines,kind){ const k=kind==='warn'?['#fff1e5','#fb8f44','#bc4c00']:['#fff8c5','#d4a72c','#3b2300'];
+  const w=Math.max(...lines.map(l=>tw(l,14,600)))+28; R(x,y,w,lines.length*22+16,8,k[0],k[1]); lines.forEach((l,i)=>T(l,x+14,y+19+i*22,{s:14,w:600,c:k[2]})); }
+
+const FIX='#bf3989', EDIT='#1a7f37';
+S({ dur:4, section:'문제 해결', draw(s){ sectionCard(s,'문제 해결','유니콘 페이지가 뜨고 안 될 때','GitHub Actions 로 기다렸는데 🦄 오류 화면만 나온다면?',FIX); }});
+
+S({ dur:8, badge:'문제 해결 1/3', color:FIX, t:'GitHub Actions 로 기다렸는데 유니콘 페이지가 뜨면', d:'새로고침해도 계속 이 화면이라면 → Source 를 Deploy from a branch 로 바꿉니다',
+ cur:[[0,640,450],[2.4,80,55,1],[6.0,700,470]],
+ draw(s){
+  browser('github.com/my-account/my-website/settings/pages');
+  ctx.fillStyle='#fff'; ctx.fillRect(0,72,W,528);
+  T('🦄',640,230,{s:120,a:'center'});
+  T('This page is taking too long to load.',640,350,{s:26,w:600,a:'center'});
+  T('Sorry about that. Please try refreshing and contact us if the problem persists.',640,388,{s:15,c:C.muted,a:'center'});
+  if(s<2.4) hl(66,42,28,26);
+  if(s>2.4&&s<2.9){ ctx.fillStyle=`rgba(255,255,255,${1-(s-2.4)/.5})`; ctx.fillRect(0,72,W,528); }
+  if(s>3.6){ ctx.globalAlpha=ease((s-3.6)/.4); note(420,440,['😥 새로고침해도 계속 유니콘 화면이라면','→ Settings ▸ Pages ▸ Source 를 Deploy from a branch 로!'],'warn'); ctx.globalAlpha=1; }
+ }});
+
+S({ dur:10, badge:'문제 해결 2/3', color:FIX, t:'Source 를 Deploy from a branch 로 다시 변경', d:'Settings → Pages → Source: Deploy from a branch → Branch main · / (root) 확인 → Save',
+ cur:[[0,700,470],[1.3,420,337,1],[3.0,420,416,1],[5.6,450,431],[7.0,615,431,1]],
+ draw(s){
+  browser('github.com/my-account/my-website/settings/pages'); settingsPage('Pages');
+  const back=s>3.0;
+  pagesMain(back?{branch:'main',saved:s>7.1}:{actions:true});
+  if(s<1.3) hl(320,322,170,30);
+  if(s>1.3&&s<3.0) menu(320,358,380,'Select source',[['Deploy from a branch','Classic Pages experience',s>2.2],['GitHub Actions','Best for using frameworks and customizing your build']]);
+  if(s>3.6&&s<6.4){ hl(320,415,250,30); note(680,410,['Branch: main, 폴더: / (root) 인지 확인']); }
+  if(s>6.4&&s<7.0) hl(580,415,70,30);
+ }});
+
+S({ dur:9, badge:'문제 해결 3/3', color:FIX, t:'1분 기다린 뒤 새로고침 → 주소가 뜨면 해결!', d:'‘Your site is live at …’ 가 보이면 Visit site 로 열어 확인합니다',
+ cur:[[0,615,431],[4.4,80,55,1],[7.0,1192,286]],
+ draw(s){
+  browser('github.com/my-account/my-website/settings/pages'); settingsPage('Pages');
+  pagesMain({branch:'main',saved:true, live:s>4.8});
+  if(s<3.8) waitRing(s,0.4,3.2,'⏳ 다시 약 1분 기다리기');
+  else if(s<4.4) hl(66,42,28,26);
+  if(s>4.4&&s<4.9){ ctx.fillStyle=`rgba(255,255,255,${1-(s-4.4)/.5})`; ctx.fillRect(0,72,W,528); }
+  if(s>5.0){ hl(320,256,940,58); if(s>7.0) hl(1140,269,105,32); }
+ }});
+
+// ================= 수정해서 다시 게시하기 =================
+const EDIT_LINES=HTML_LINES.slice(); const H1_PRE='  <h1>', H1_OLD='안녕하세요!', H1_NEW='반갑습니다! 새 소식입니다', LINE_Y=290+7*22;
+let SEL_X0=0, SEL_X1=0;
+function commitModal(s,t0,t1,msg,hlFrom){
+  if(s<=t0||s>=t1) return;
+  const a=ease((s-t0)/.3); ctx.fillStyle=`rgba(0,0,0,${.35*a})`; ctx.fillRect(0,72,W,528);
+  ctx.globalAlpha=a; shadowBox(390,170,500,330,10);
+  T('Commit changes',410,198,{s:18,w:600}); T('✕',870,198,{s:16,c:C.muted,a:'center'}); ctx.fillStyle=C.border; ctx.fillRect(390,222,500,1);
+  T('Commit message',410,240,{s:14,w:600}); input(410,252,460,32,msg);
+  T('Extended description',410,306,{s:14,w:600}); R(410,318,460,56,6,'#fff',C.border); T('Add an optional extended description..',420,334,{s:13,c:'#8c959f'});
+  ctx.beginPath(); ctx.arc(420,402,7,0,Math.PI*2); ctx.strokeStyle='#0969da'; ctx.lineWidth=2; ctx.stroke(); ctx.beginPath(); ctx.arc(420,402,3.5,0,Math.PI*2); ctx.fillStyle='#0969da'; ctx.fill();
+  T('Commit directly to the main branch',436,402,{s:13});
+  btn(640,445,90,32,'Cancel'); btn(740,445,130,32,'Commit changes','green');
+  if(s>hlFrom) hl(740,445,130,32);
+  ctx.globalAlpha=1;
+}
+function sampleSite(title){
+  const g=ctx.createLinearGradient(0,72,W,600); g.addColorStop(0,'#6e40c9'); g.addColorStop(1,'#1f6feb'); ctx.fillStyle=g; ctx.fillRect(0,72,W,528);
+  T(title,640,270,{s:60,w:700,c:'#fff',a:'center'});
+  T('GitHub Pages로 만든 첫 웹사이트입니다.',640,345,{s:24,c:'#e6edf3',a:'center'});
+}
+
+S({ dur:4, section:'수정하기', draw(s){ sectionCard(s,'수정해서 다시 게시하기','이미 올린 HTML 내용 바꾸기','저장소의 index.html 을 고치고 Commit 하면 사이트도 자동으로 바뀌어요',EDIT); }});
+
+S({ dur:6, badge:'수정하기 1/6', color:EDIT, t:'저장소에서 index.html 열기', d:'github.com 의 내 저장소(my-website) → <> Code 탭 → index.html 클릭',
+ cur:[[0,640,450],[1.0,60,146,1],[3.0,100,331,1]],
+ draw(s){
+  browser('github.com/my-account/my-website'); codePage('index.html','Rename mysite.html to index.html','2 Commits');
+  if(s>1.3&&s<3.0) hl(60,320,90,22);
+ }});
+
+S({ dur:5, badge:'수정하기 2/6', color:EDIT, t:'연필 아이콘으로 편집 시작', d:'오른쪽 위 ✎ Edit this file 클릭',
+ cur:[[0,100,331],[1.5,1141,287],[2.8,1141,287,1]],
+ draw(s){ fileView(s,'index.html','Rename mysite.html to index.html'); }});
+
+S({ dur:12, badge:'수정하기 3/6', color:EDIT, t:'내용을 고치고 Commit', d:'바꿀 부분을 수정 → Commit changes… → Commit changes (파일 이름은 index.html 그대로!)',
+ setup(){ SEL_X0=70+tw(H1_PRE,13); SEL_X1=SEL_X0+tw(H1_OLD,13); this.cur=[[0,1141,287],[1.3,SEL_X0,LINE_Y,1],[2.3,SEL_X1,LINE_Y],[5.6,1180,200,1],[8.6,805,461,1]]; },
+ draw(s){
+  browser('github.com/my-account/my-website/edit/main/index.html'); repoHeader('<> Code');
+  T('my-website /',20,200,{s:15,c:C.link,w:600}); input(130,184,220,32,'index.html'); T('in  ⑂ main',362,200,{s:14,c:C.muted});
+  btn(960,184,130,32,'Cancel changes'); btn(1100,184,160,32,'Commit changes…','green');
+  if(s>4.8&&s<5.6) hl(1100,184,160,32);
+  R(20,230,1240,355,6,'#fff',C.border); R(20,230,1240,40,[6,6,0,0],C.subtle);
+  T('Edit',48,250,{s:13,w:600}); T('Preview',100,250,{s:13,c:C.muted});
+  const lines=EDIT_LINES.slice(); const typing=s>=2.5;
+  const mid = typing ? typ(H1_NEW,2.6,4.4,s) : H1_OLD;
+  lines[7]=H1_PRE+mid+'</h1>';
+  if(s>1.3) R(20,LINE_Y-11,1240,22,0,'#fff8c5');
+  if(s>1.3&&s<2.5){ const x1=SEL_X0+(SEL_X1-SEL_X0)*clamp((s-1.3)/1.0); R(SEL_X0,LINE_Y-9,x1-SEL_X0,18,2,'#b6d7ff'); }
+  codeLines(20,290,11,lines);
+  if(typing && s<5.6 && caretOn()){ ctx.fillStyle=C.text; ctx.fillRect(SEL_X0+tw(mid,13),LINE_Y-8,1.5,16); }
+  if(s>1.3&&s<5.4) note(760,LINE_Y-26,['✏️ 바꾸고 싶은 내용을 직접 고쳐요']);
+  if(s>3.0&&s<5.4) note(760,LINE_Y+24,['⚠ 위쪽 파일 이름(index.html)은 바꾸지 않기'],'warn');
+  commitModal(s,5.8,9.0,'Update index.html',7.4);
+ }});
+
+S({ dur:8, badge:'수정하기 4/6', color:EDIT, t:'(다른 방법) 고친 파일을 다시 업로드', d:'Add file ▾ → Upload files → 내 PC의 index.html 올리기 → Commit changes (같은 이름이면 덮어쓰기)',
+ cur:[[0,805,461],[1.0,1065,235,1],[2.3,1040,344,1],[6.4,95,564,1]],
+ draw(s){
+  if(s<2.6){
+    browser('github.com/my-account/my-website'); codePage('index.html','Update index.html','3 Commits');
+    if(s<1.0) hl(1010,220,110,30);
+    if(s>1.0) menu(960,256,220,'Add file',[['+  Create new file'],['⤒  Upload files',null,s>1.6]]);
+    return;
+  }
+  browser('github.com/my-account/my-website/upload/main'); repoHeader('<> Code');
+  T('my-website /',20,194,{s:16,w:600});
+  ctx.save(); ctx.setLineDash([8,6]); R(20,212,1240,170,8,'#fff','#afb8c1',2); ctx.restore();
+  T('📄',640,252,{s:30,a:'center'}); T('Drag files here to add them to your repository',640,298,{s:20,w:600,a:'center'}); T('Or choose your files',640,328,{s:14,c:C.link,a:'center'});
+  if(s>3.2){ R(20,392,1240,30,6,C.subtle,C.border); T('📄  index.html',34,407,{s:14,w:600}); T('2 KB   ✕',1245,407,{s:13,c:C.muted,a:'right'}); hl(20,392,1240,30); }
+  R(20,432,1240,104,6,'#fff',C.border); T('Commit changes',36,452,{s:16,w:600}); input(36,468,560,30,'Add files via upload');
+  T('Commit directly to the main branch.',62,518,{s:13});
+  btn(20,548,150,32,'Commit changes','green'); btn(180,548,80,32,'Cancel');
+  if(s>3.4) note(640,462,['💡 내 PC 파일 이름도 꼭 index.html','같은 이름이면 기존 파일이 새 내용으로 바뀌어요']);
+  if(s>5.0&&s<6.4) hl(20,548,150,32);
+ }});
+
+S({ dur:7, badge:'수정하기 5/6', color:EDIT, t:'배포가 끝날 때까지 기다리기', d:'Actions 탭에서 진행 상황 확인: 노란 점(진행 중) → 초록 체크(완료), 보통 1분 내외',
+ cur:[[0,95,564],[1.0,331,146,1],[3.0,500,340]],
+ draw(s){
+  if(s<1.3){ browser('github.com/my-account/my-website'); codePage('index.html','Update index.html','3 Commits'); hl(292,128,78,36); return; }
+  browser('github.com/my-account/my-website/actions'); repoHeader('Actions');
+  T('Actions',20,200,{s:20,w:600});
+  R(20,226,260,30,6,'#eef1f4'); T('All workflows',36,241,{s:14,w:600}); T('pages-build-deployment',36,275,{s:14});
+  ctx.fillStyle=C.border; ctx.fillRect(300,180,1,410);
+  T('All workflows',320,200,{s:20,w:600}); T('Showing runs from all workflows',320,226,{s:13,c:C.muted});
+  R(320,244,940,140,6,'#fff',C.border); R(320,244,940,40,[6,6,0,0],C.subtle); T('2 workflow runs',336,264,{s:14,w:600});
+  const done=s>4.2;
+  // row 1 (new)
+  if(done){ ctx.beginPath(); ctx.arc(344,312,9,0,Math.PI*2); ctx.fillStyle='#1a7f37'; ctx.fill(); T('✓',344,313,{s:12,w:700,c:'#fff',a:'center'}); }
+  else { ctx.lineWidth=3; ctx.strokeStyle='#d4a72c'; ctx.beginPath(); ctx.arc(344,312,8,now*6,now*6+Math.PI*1.5); ctx.stroke(); }
+  T('pages build and deployment',364,304,{s:15,w:600}); T('Update index.html · main',364,324,{s:12,c:C.muted});
+  T(done?'now · 38s':'In progress',1245,312,{s:13,c:done?C.muted:'#9a6700',a:'right',w:600});
+  ctx.fillStyle=C.border; ctx.fillRect(320,340,940,1);
+  ctx.beginPath(); ctx.arc(344,362,9,0,Math.PI*2); ctx.fillStyle='#1a7f37'; ctx.fill(); T('✓',344,363,{s:12,w:700,c:'#fff',a:'center'});
+  T('pages build and deployment',364,356,{s:15,w:600,c:C.muted}); T('Rename mysite.html to index.html · main',364,374,{s:12,c:C.muted});
+  hl(320,288,940,50);
+  note(320,400,[done?'✅ 초록 체크가 뜨면 배포 완료!':'🟡 노란 점 = 아직 배포 중이에요']);
+ }});
+
+S({ dur:8, badge:'수정하기 6/6', color:EDIT, t:'사이트를 새로고침해서 바뀐 내용 확인', d:'내 사이트 주소에서 새로고침(F5) — 그대로면 Ctrl + F5 (강력 새로고침)',
+ cur:[[0,500,340],[1.6,80,55,1],[4.5,640,470]],
+ draw(s){
+  browser('my-account.github.io/my-website/');
+  sampleSite(s<2.0?'안녕하세요!':H1_NEW);
+  if(s<1.6) hl(66,42,28,26);
+  if(s>1.6&&s<2.1){ ctx.fillStyle=`rgba(255,255,255,${1-(s-1.6)/.5})`; ctx.fillRect(0,72,W,528); }
+  if(s>2.4){ const b=ease((s-2.4)/.4); ctx.globalAlpha=b; R(380,420,520,56,28,'rgba(255,255,255,.95)'); T('🎉 수정한 내용이 사이트에 반영됐어요!',640,449,{s:18,w:700,c:'#1a7f37',a:'center'}); ctx.globalAlpha=1; }
+  if(s>4.0){ ctx.globalAlpha=ease((s-4.0)/.4); R(420,500,440,40,8,'rgba(13,17,23,.85)'); T('안 바뀌었다면?  Ctrl + F5  또는 1~2분 더 기다리기',640,520,{s:15,w:600,c:'#fff',a:'center'}); ctx.globalAlpha=1; }
+ }});
+
+S({ dur:10, outro:true, draw(s){
+  const g=ctx.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0d1117'); g.addColorStop(1,'#132a4a'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  T('한눈에 정리',640,80,{s:36,w:700,c:'#fff',a:'center'});
+  const items=['로그인','☰ → All repositories → New repository','이름 입력 → Create repository','uploading an existing file','HTML 파일 올리기 → Commit changes','Code → 파일 클릭 → ✎ Edit this file','파일명을 index.html 로 → Commit','Settings → Pages','Branch: main · /(root) → Save','Source → GitHub Actions','1분 기다린 뒤 새로고침 → 주소 확인'];
+  items.forEach((it,i)=>{ const col=i<6?0:1, row=i<6?i:i-6; const x=col?680:120, y=118+row*58; const a=ease((s-0.2-i*0.18)/.4); ctx.globalAlpha=a;
+    R(x,y,480,54,10,'rgba(255,255,255,.06)','rgba(255,255,255,.12)'); ctx.beginPath(); ctx.arc(x+28,y+27,15,0,Math.PI*2); ctx.fillStyle='#2f81f7'; ctx.fill();
+    T(String(i+1),x+28,y+28,{s:14,w:700,c:'#fff',a:'center'}); T(it,x+56,y+28,{s:17,c:'#e6edf3'}); ctx.globalAlpha=1; });
+  ctx.globalAlpha=ease((s-2.6)/.6);
+  R(120,478,480,96,10,'rgba(191,57,137,.16)','#bf3989'); T('🦄 유니콘 페이지가 뜨면',140,504,{s:18,w:700,c:'#ff9bce'});
+  T('Source → Deploy from a branch → main · /(root)',140,534,{s:15,c:'#e6edf3'}); T('→ Save → 1분 뒤 새로고침',140,558,{s:15,c:'#e6edf3'});
+  R(680,478,480,96,10,'rgba(26,127,55,.18)','#2ea043'); T('✏️ 내용을 수정해서 다시 게시하려면',700,504,{s:18,w:700,c:'#7ee787'});
+  T('index.html → ✎ 편집 → Commit changes',700,534,{s:15,c:'#e6edf3'}); T('→ 1분 뒤 새로고침 (안 바뀌면 Ctrl+F5)',700,558,{s:15,c:'#e6edf3'});
+  ctx.globalAlpha=1;
+  ctx.globalAlpha=ease((s-3.6)/.6); T('주소 형식: https://아이디.github.io/저장소이름/',640,622,{s:22,w:600,c:'#7ee787',a:'center'});
+  T('⚠ 첫 번째 HTML 파일 이름은 꼭 index.html',640,666,{s:20,w:600,c:'#ffa657',a:'center'}); ctx.globalAlpha=1;
+}});
+
+// ---------- timeline ----------
+const STARTS=[]; let TOTAL=0;
+SCENES.forEach(sc=>{ STARTS.push(TOTAL); TOTAL+=sc.dur; if(sc.setup) sc.setup.call(sc); });
+const STEPS_N = SCENES.filter(s=>s.step).length;
+
+function curPos(keys,s){
+  if(s<=keys[0][0]) return [keys[0][1],keys[0][2]];
+  for(let i=1;i<keys.length;i++){ const a=keys[i-1], b=keys[i];
+    if(s<=b[0]){ const st=Math.max(a[0], b[0]-0.9); if(s<st) return [a[1],a[2]]; const t=ease((s-st)/(b[0]-st)); return [a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; } }
+  const l=keys[keys.length-1]; return [l[1],l[2]];
+}
+function drawCursor(x,y,press){
+  ctx.save(); ctx.translate(x,y); if(press) ctx.scale(.88,.88);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(0,23); ctx.lineTo(5.5,17.5); ctx.lineTo(9.5,26.5); ctx.lineTo(13,25); ctx.lineTo(9,16.5); ctx.lineTo(16,16.5); ctx.closePath();
+  ctx.shadowColor='rgba(0,0,0,.35)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
+  ctx.fillStyle='#fff'; ctx.fill(); ctx.shadowColor='transparent'; ctx.strokeStyle='#000'; ctx.lineWidth=1.6; ctx.stroke(); ctx.restore();
+}
+function caption(sc, s){
+  ctx.fillStyle='#0d1117'; ctx.fillRect(0,600,W,120);
+  const a=ease(s/.4); ctx.globalAlpha=a;
+  const label=sc.badge||`STEP ${sc.step} / ${STEPS_N}`; const bw=Math.max(128,tw(label,15,700)+28);
+  R(30,620,bw,32,16,sc.color||'#1f6feb'); T(label,30+bw/2,637,{s:15,w:700,c:'#fff',a:'center'});
+  const tx=30+bw+20;
+  T(sc.t,tx,636,{s:26,w:700,c:'#fff'});
+  T(sc.d,tx,678,{s:18,c:'#b7c0cc'});
+  ctx.globalAlpha=1;
+}
+function sceneAt(t){ let i=0; while(i<SCENES.length-1 && t>=STARTS[i+1]) i++; return i; }
+function render(){
+  const i=sceneAt(now), sc=SCENES[i], s=now-STARTS[i];
+  ctx.save(); sc.draw(s); ctx.restore();
+  if(sc.step||sc.badge) caption(sc,s);
+  if(sc.cur){
+    const [cx,cy]=curPos(sc.cur,s); let press=false;
+    sc.cur.forEach(k=>{ if(k[3] && s>=k[0] && s<k[0]+0.5){ const p=(s-k[0])/0.5; press = press || p<0.25;
+      ctx.beginPath(); ctx.arc(k[1],k[2],8+26*p,0,Math.PI*2); ctx.strokeStyle=`rgba(255,140,0,${1-p})`; ctx.lineWidth=3; ctx.stroke();
+      ctx.beginPath(); ctx.arc(k[1],k[2],10*(1-p)+2,0,Math.PI*2); ctx.fillStyle=`rgba(255,140,0,${.5*(1-p)})`; ctx.fill(); } });
+    if(sc.overlay) sc.overlay(s,cx,cy);
+    drawCursor(cx,cy,press);
+  }
+  ctx.fillStyle='rgba(255,255,255,.12)'; ctx.fillRect(0,H-4,W,4); ctx.fillStyle='#2f81f7'; ctx.fillRect(0,H-4,W*now/TOTAL,4);
+}
+
+// ---------- player ----------
+let playing=true, last=null, recorder=null, chunks=[];
+const $=id=>document.getElementById(id);
+const fmt=t=>Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0');
+const stepsEl=$('steps');
+SCENES.forEach((sc,i)=>{ const b=document.createElement('button'); b.textContent = sc.step ? `${sc.step}. ${sc.t}` : sc.badge ? `[${sc.badge}] ${sc.t}` : sc.section ? `■ ${sc.section} 시작` : (sc.intro?'▶ 시작':'✔ 한눈에 정리'); b.onclick=()=>seek(STARTS[i]); stepsEl.appendChild(b); });
+function seek(t){ if(recorder) return; now=Math.max(0,Math.min(TOTAL-0.001,t)); }
+function setPlaying(p){ playing=p; $('play').textContent=p?'⏸ 일시정지':'▶ 재생'; }
+$('play').onclick=()=>{ if(recorder) return; if(!playing && now>=TOTAL-0.01) now=0; setPlaying(!playing); };
+$('prev').onclick=()=>{ const i=sceneAt(now); seek(now-STARTS[i]>1.5?STARTS[i]:STARTS[Math.max(0,i-1)]); };
+$('next').onclick=()=>{ const i=sceneAt(now); seek(STARTS[Math.min(SCENES.length-1,i+1)]); };
+$('seek').oninput=e=>seek(e.target.value/1000*TOTAL);
+document.addEventListener('keydown',e=>{ if(e.code==='Space'){e.preventDefault();$('play').click();} if(e.code==='ArrowRight')$('next').click(); if(e.code==='ArrowLeft')$('prev').click(); });
+
+$('rec').onclick=()=>{
+  if(recorder) return;
+  if(!cv.captureStream || !window.MediaRecorder){ $('status').textContent='이 브라우저는 녹화를 지원하지 않습니다. Chrome 또는 Edge에서 열어 주세요.'; return; }
+  const mime=['video/mp4;codecs=avc1.42E01E','video/mp4','video/webm;codecs=vp9','video/webm'].find(m=>MediaRecorder.isTypeSupported(m));
+  const stream=cv.captureStream(30);
+  recorder=new MediaRecorder(stream,{mimeType:mime, videoBitsPerSecond:8000000}); chunks=[];
+  recorder.ondataavailable=e=>{ if(e.data.size) chunks.push(e.data); };
+  recorder.onstop=()=>{
+    const blob=new Blob(chunks,{type:mime}); const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download='GitHub_Pages_게시방법_시연.'+(mime.includes('mp4')?'mp4':'webm'); a.click();
+    $('status').textContent='✔ 저장 완료: '+a.download+' (다운로드 폴더 확인)'; $('rec').textContent='● 영상 파일로 저장'; recorder=null;
+  };
+  now=0; setPlaying(true); recorder.start(1000);
+  $('rec').textContent='● 녹화 중…'; $('status').textContent='녹화 중입니다. 끝날 때까지(약 '+fmt(TOTAL)+') 이 탭을 화면에 띄워 두세요.';
+};
+
+function frame(ts){
+  if(last==null) last=ts; const dt=Math.min(0.1,(ts-last)/1000); last=ts;
+  if(playing){ now+=dt; if(now>=TOTAL){ now=TOTAL-0.001; setPlaying(false); if(recorder && recorder.state==='recording') setTimeout(()=>recorder.stop(),300); } }
+  render();
+  $('seek').value=Math.round(now/TOTAL*1000); $('time').textContent=fmt(now)+' / '+fmt(TOTAL);
+  const i=sceneAt(now); [...stepsEl.children].forEach((b,j)=>b.classList.toggle('on',j===i));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
